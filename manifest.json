@@ -11,10 +11,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "aws-confirmation-autofill@personal",
-      "data_collection_permissions": {
-        "required": ["none"]
-      }
+      "id": "aws-confirmation-autofill.BramMeerten@github.com"
     }
   },
   "content_scripts": [
@@ -22,10 +19,7 @@
       "matches": [
         "https://*.console.aws.amazon.com/*",
         "https://console.aws.amazon.com/*",
-        "https://*.aws.amazon.com/*",
-        "http://localhost/*",
-        "http://127.0.0.1/*",
-        "file://*/*"
+        "https://*.aws.amazon.com/*"
       ],
       "all_frames": true,
       "js": ["content.js"],

@@ -1,12 +1,3 @@
-/**
- * AWS Confirmation Autofill
- * 
- * Automatically detects confirmation inputs across the AWS Management Console
- * (e.g., "permanently delete", resource names, "delete", "confirm") and fills them in.
- * 
- * Does NOT auto-submit: leaves the final confirmation click safely in user control.
- */
-
 (() => {
   // Prevent duplicate execution if injected multiple times
   if (window.__awsConfirmationAutofillLoaded) return;
@@ -75,32 +66,34 @@
   }
 
   /**
-   * Analyzes an input and its context to determine if it is a confirmation field,
-   * and extracts the required confirmation string.
+   * Determine if input is a confirmation field and extracts the required confirmation string.
    */
   function extractConfirmationTarget(input) {
-    if (!input || input.tagName !== 'INPUT') return null;
+    if (input?.tagName !== 'INPUT') {
+      return null;
+    }
 
     // Must be standard text input
     const type = (input.getAttribute('type') || 'text').toLowerCase();
-    if (type !== 'text' && type !== '') return null;
-    if (input.disabled || input.readOnly) return null;
+    if (type !== 'text' || input.disabled || input.readOnly) {
+      return null;
+    }
 
     // If input already has a value (e.g. user typed something), leave it alone
-    if (input.value && input.value.trim().length > 0) return null;
+    if (input.value && input.value.trim().length > 0) {
+      return null;
+    }
 
     const placeholder = (input.getAttribute('placeholder') || '').trim();
     const labelEl = findAssociatedLabel(input);
-    const labelText = labelEl ? (labelEl.textContent || '').trim() : '';
+    const labelText = labelEl?.textContent?.trim() ?? '';
     const ariaLabel = (input.getAttribute('aria-label') || '').trim();
     const headingText = findContainerHeading(input);
 
     const fullContext = `${labelText} ${ariaLabel} ${headingText}`;
 
     // Validate that this is indeed an AWS confirmation prompt
-    const isConfirmContext =
-      CONFIRM_KEYWORD_REGEX.test(fullContext) ||
-      (/\bconfirm\b/i.test(fullContext) && DESTRUCTIVE_KEYWORD_REGEX.test(fullContext));
+    const isConfirmContext = CONFIRM_KEYWORD_REGEX.test(fullContext) || (/\bconfirm\b/i.test(fullContext) && DESTRUCTIVE_KEYWORD_REGEX.test(fullContext));
 
     if (!isConfirmContext) {
       return null;
@@ -168,8 +161,6 @@
    * so the confirmation action button (e.g. "Delete bucket") becomes active.
    */
   function fillInputValue(input, targetValue) {
-    if (!input || !targetValue) return;
-
     const win = input.ownerDocument.defaultView || window;
 
     try {
@@ -227,7 +218,7 @@
    * Inspects a specific input and autofills it if appropriate.
    */
   function processInput(input) {
-    if (!input || processedInputs.has(input) || input.dataset.awsAutofilled === 'true') {
+    if (processedInputs.has(input) || input.dataset.awsAutofilled === 'true') {
       return;
     }
 

@@ -1,4 +1,4 @@
-/* Subtle highlight when an input is auto-filled by AWS Confirmation Autofill */
+/* Highlight when an input is auto-filled */
 input.aws-confirmation-autofilled {
   box-shadow: 0 0 0 2px rgba(46, 133, 64, 0.45) !important;
   border-color: #1d8102 !important;
