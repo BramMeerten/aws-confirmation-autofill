@@ -13,10 +13,28 @@
   // Generic placeholder texts that should not be used as raw values
   const GENERIC_PLACEHOLDER_REGEX = /^(?:enter|type|search|filter|select|optional|e\.?g\.|find)\b/i;
 
+  // Common AWS resource nouns that should not be mistaken for literal names in unquoted headings
+  const GENERIC_RESOURCE_TYPES = new Set([
+    'bucket', 'role', 'stack', 'table', 'database', 'cluster', 'instance',
+    'function', 'distribution', 'policy', 'group', 'user', 'queue', 'topic',
+    'repository', 'volume', 'snapshot', 'secret', 'certificate', 'key',
+    'resource', 'items', 'objects', 'identity', 'profile'
+  ]);
+
   /**
-   * Locates the label associated with an input element using ARIA, for/id, or Cloudscape wrappers.
+   * Locates the dialog, modal, container card, or form wrapping the confirmation input.
    */
-  function findAssociatedLabel(input) {
+  function findConfirmationContainer(input) {
+    return input.closest(
+      '[role="dialog"], [role="alertdialog"], [data-awsui-analytics*="Modal" i], [data-awsui-analytics*="Container" i], [data-awsui-analytics*="Form" i], [data-analytics-funnel-step], [class*="modal" i], [class*="dialog" i], [class*="awsui_container_"], [class*="container_"], [class*="container" i], form'
+    );
+  }
+
+  /**
+   * Locates the label or prompt associated with an input element using ARIA, for/id,
+   * Cloudscape FormField wrapper, or preceding sibling layout containers.
+   */
+  function findAssociatedLabel(input, container) {
     const root = input.ownerDocument || document;
 
     // 1. Explicit aria-labelledby
@@ -34,10 +52,23 @@
       try {
         const labelFor = root.querySelector(`label[for="${CSS.escape(input.id)}"]`);
         if (labelFor) return labelFor;
-      } catch (e) {}
+      } catch (e) {
+        const labelFor = root.querySelector(`label[for="${input.id}"]`);
+        if (labelFor) return labelFor;
+      }
     }
 
-    // 3. AWS Cloudscape / AWSUI FormField container wrapper
+    // 3. Explicit aria-describedby
+    const ariaDescribedBy = input.getAttribute('aria-describedby');
+    if (ariaDescribedBy) {
+      const ids = ariaDescribedBy.trim().split(/\s+/);
+      for (const id of ids) {
+        const el = root.getElementById(id);
+        if (el) return el;
+      }
+    }
+
+    // 4. AWS Cloudscape / AWSUI FormField container wrapper
     const formField = input.closest(
       '[data-awsui-analytics*="FormField"], [class*="form-field"], [class*="FormField"], .awsui_root_14mhv_2g2j7_96'
     );
@@ -46,23 +77,98 @@
       if (labelInField) return labelInField;
     }
 
-    // 4. Input wrapped in label
-    return input.closest('label');
+    // 5. Input wrapped in label
+    const wrappedLabel = input.closest('label');
+    if (wrappedLabel) return wrappedLabel;
+
+    // 6. Preceding sibling or layout sibling prompt (e.g. Cloudscape SpaceBetween without FormField)
+    // First pass: look for a preceding sibling that contains confirmation keywords
+    let curr = input;
+    let depth = 0;
+    while (curr && curr !== container && depth < 5) {
+      if (curr.previousElementSibling) {
+        const prev = curr.previousElementSibling;
+        if (!prev.querySelector('input, select, textarea')) {
+          const text = (prev.textContent || '').trim();
+          if (text && CONFIRM_KEYWORD_REGEX.test(text)) {
+            return prev;
+          }
+        }
+      }
+      curr = curr.parentElement;
+      depth++;
+    }
+
+    // Second pass: look for immediate preceding sibling with short label-like text
+    curr = input;
+    depth = 0;
+    while (curr && curr !== container && depth < 3) {
+      if (curr.previousElementSibling) {
+        const prev = curr.previousElementSibling;
+        if (!prev.querySelector('input, select, textarea')) {
+          const text = (prev.textContent || '').trim();
+          if (text && text.length < 200) {
+            return prev;
+          }
+        }
+      }
+      curr = curr.parentElement;
+      depth++;
+    }
+
+    // 7. Prompt text inside confirmation container
+    if (container) {
+      const promptCandidates = container.querySelectorAll('[class*="box"], [class*="child"], p, span, div');
+      for (const cand of promptCandidates) {
+        if (cand.children.length <= 2 && !cand.querySelector('input, select, textarea')) {
+          const text = (cand.textContent || '').trim();
+          if (CONFIRM_KEYWORD_REGEX.test(text)) {
+            return cand;
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   /**
    * Retrieves the heading of the parent dialog, modal, container, or form.
    */
-  function findContainerHeading(input) {
-    const container = input.closest(
-      '[role="dialog"], [data-awsui-analytics*="Modal"], [data-awsui-analytics*="Container"], [data-analytics-funnel-step], [class*="modal"], [class*="dialog"], form'
-    );
-    if (!container) return '';
+  function findContainerHeading(input, container) {
+    const searchRoot = container || findConfirmationContainer(input);
+    if (!searchRoot) return '';
 
-    const headingEl = container.querySelector(
-      'h1, h2, h3, h4, [class*="heading"], [class*="title"], [data-analytics-funnel-key="substep-name"]'
+    const headingEl = searchRoot.querySelector(
+      'h1, h2, h3, h4, [class*="heading"], [class*="title"], [data-analytics-funnel-key="substep-name"], [class*="awsui_header--text_"], [class*="header--text"]'
     );
     return headingEl ? (headingEl.textContent || '').trim() : '';
+  }
+
+  /**
+   * Extracts a potential resource name target from a container or modal heading.
+   */
+  function extractFromHeading(headingText) {
+    if (!headingText) return null;
+
+    // 1. Quoted string in heading (e.g. Delete bucket "my-bucket"?)
+    const quoted = headingText.match(/["'“‘`]([^"'”’`]+)["'”’`]/);
+    if (quoted && quoted[1].trim()) {
+      return quoted[1].trim();
+    }
+
+    // 2. Unquoted resource name in heading (e.g. Delete AwsLakehouseOutputPort-test?)
+    const match = headingText.trim().match(
+      /^(?:delete|permanently delete|terminate|empty|destroy|remove)\s+(?:.+?\s+)?([a-zA-Z0-9_\-\.\/]+)\??$/i
+    );
+    if (match && match[1]) {
+      const candidate = match[1].trim();
+      if (!GENERIC_RESOURCE_TYPES.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -79,21 +185,49 @@
       return null;
     }
 
+    // Exclude search or table filter inputs
+    if (
+      input.closest(
+        '[class*="search" i], [class*="filter" i], [data-awsui-analytics*="Search" i], [data-awsui-analytics*="TextFilter" i]'
+      )
+    ) {
+      return null;
+    }
+
     // If input already has a value (e.g. user typed something), leave it alone
     if (input.value && input.value.trim().length > 0) {
       return null;
     }
 
     const placeholder = (input.getAttribute('placeholder') || '').trim();
-    const labelEl = findAssociatedLabel(input);
+    const container = findConfirmationContainer(input);
+    const labelEl = findAssociatedLabel(input, container);
     const labelText = labelEl?.textContent?.trim() ?? '';
     const ariaLabel = (input.getAttribute('aria-label') || '').trim();
-    const headingText = findContainerHeading(input);
+    const headingText = findContainerHeading(input, container);
+    const containerText = container?.textContent?.trim() ?? '';
 
-    const fullContext = `${labelText} ${ariaLabel} ${headingText}`;
+    const inputTestId =
+      input.getAttribute('data-testid') ||
+      input.closest('[data-testid]')?.getAttribute('data-testid') ||
+      '';
+
+    const fullContext = `${labelText} ${ariaLabel} ${headingText} ${inputTestId}`;
 
     // Validate that this is indeed an AWS confirmation prompt
-    const isConfirmContext = CONFIRM_KEYWORD_REGEX.test(fullContext) || (/\bconfirm\b/i.test(fullContext) && DESTRUCTIVE_KEYWORD_REGEX.test(fullContext));
+    const hasConfirmKeyword =
+      CONFIRM_KEYWORD_REGEX.test(fullContext) ||
+      CONFIRM_KEYWORD_REGEX.test(containerText) ||
+      /confirm/i.test(inputTestId);
+
+    const hasDestructiveContext =
+      DESTRUCTIVE_KEYWORD_REGEX.test(fullContext) ||
+      DESTRUCTIVE_KEYWORD_REGEX.test(containerText);
+
+    const isConfirmContext =
+      (hasConfirmKeyword && hasDestructiveContext) ||
+      CONFIRM_KEYWORD_REGEX.test(fullContext) ||
+      /confirm.*delete|delete.*confirm/i.test(inputTestId);
 
     if (!isConfirmContext) {
       return null;
@@ -107,6 +241,24 @@
       if (styledTag && styledTag.textContent) {
         const text = styledTag.textContent.trim();
         if (text) extracted = text;
+      }
+    }
+
+    // Strategy 1b: Styled emphasis in container warning box if not found in label
+    if (!extracted && container) {
+      const styledTags = container.querySelectorAll('em, code, strong, b, mark');
+      for (const tag of styledTags) {
+        const text = tag.textContent.trim();
+        if (text && !GENERIC_RESOURCE_TYPES.has(text.toLowerCase())) {
+          if (placeholder && text.toLowerCase() === placeholder.toLowerCase()) {
+            extracted = text;
+            break;
+          }
+          if (headingText && headingText.toLowerCase().includes(text.toLowerCase())) {
+            extracted = text;
+            break;
+          }
+        }
       }
     }
 
@@ -125,25 +277,31 @@
       );
       if (typeMatch && typeMatch[1].trim()) {
         const phrase = typeMatch[1].trim();
-        if (!/^(?:the|a|an|the name of|name|identifier)$/i.test(phrase)) {
+        const isGenericDescription =
+          /^(?:the\s+|a\s+|an\s+)?(?:name|role(?:\s+name)?|bucket(?:\s+name)?|table(?:\s+name)?|database(?:\s+name)?|cluster(?:\s+name)?|instance(?:\s+name)?|resource(?:\s+name)?|identifier|id|arn)\b/i.test(phrase) ||
+          /^(?:the\s+)?name\s+of\b/i.test(phrase) ||
+          /^(?:the|a|an)$/i.test(phrase);
+
+        if (!isGenericDescription) {
           extracted = phrase;
         }
       }
     }
 
-    // Strategy 4: Quoted resource name in heading (e.g. Delete bucket "my-bucket"?)
+    // Strategy 4: Quoted or unquoted resource name in heading (e.g. Delete bucket "my-bucket"? or Delete my-role?)
     if (!extracted && headingText) {
-      const quotedHeading = headingText.match(/["'“‘`]([^"'”’`]+)["'”’`]/);
-      if (quotedHeading && quotedHeading[1].trim()) {
-        extracted = quotedHeading[1].trim();
-      }
+      extracted = extractFromHeading(headingText);
     }
 
     // Strategy 5: Cloudscape placeholder cross-check and fallback
-    // In AWS Cloudscape, the placeholder often contains the exact target string
     if (placeholder) {
       // If extracted matches placeholder, high-confidence match
       if (extracted && extracted.toLowerCase() === placeholder.toLowerCase()) {
+        return placeholder;
+      }
+
+      // If placeholder matches resource in heading or container styled text
+      if (headingText && headingText.toLowerCase().includes(placeholder.toLowerCase())) {
         return placeholder;
       }
 
@@ -268,7 +426,8 @@
         mutation.type === 'attributes' &&
         (mutation.attributeName === 'placeholder' ||
           mutation.attributeName === 'aria-labelledby' ||
-          mutation.attributeName === 'id')
+          mutation.attributeName === 'id' ||
+          mutation.attributeName === 'disabled')
       ) {
         shouldScan = true;
         break;
@@ -284,6 +443,6 @@
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['placeholder', 'aria-labelledby', 'id'],
+    attributeFilter: ['placeholder', 'aria-labelledby', 'id', 'disabled'],
   });
 })();
