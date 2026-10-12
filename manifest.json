@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AWS Confirmation Autofill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automatically fills in confirmation text in AWS Console prompts without submitting.",
   "icons": {
     "16": "icons/icon-16.png",
